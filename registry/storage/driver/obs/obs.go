@@ -819,7 +819,7 @@ func (d *driver) URLFor(ctx context.Context, path string, options map[string]int
 		Key:     d.obsPath(path),
 		Expires: int(expiresIn.Seconds()),
 	})
-	fmt.Printf("OBS-URLFor methodString: %s, expiresTime: %v", methodString, int(expiresIn.Seconds()))
+	fmt.Printf("OBS-URLFor methodString: %s, expiresTime: %v\n", methodString, int(expiresIn.Seconds()))
 	return output.SignedUrl, err
 }
 
