@@ -389,7 +389,7 @@ func New(params DriverParameters) (*Driver, error) {
 		params.AccessKey,
 		params.SecretKey,
 		params.Endpoint,
-		//obs.WithRegion(params.Region),
+		obs.WithRegion(params.Region),
 		obs.WithSslVerify(params.Secure),
 		obs.WithSignature(params.V2Auth),
 		obs.WithPathStyle(params.PathStyle),
@@ -401,9 +401,9 @@ func New(params DriverParameters) (*Driver, error) {
 		Bucket:       params.Bucket,
 		ACL:          params.ObjectACL,
 		StorageClass: params.StorageClass,
-		/*BucketLocation: obs.BucketLocation{
+		BucketLocation: obs.BucketLocation{
 			Location: params.Region,
-		},*/
+		},
 	})
 	if err != nil {
 		status, code, message, requestId := getErrorInfo(err)
@@ -698,13 +698,13 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 		_, err := d.Client.CopyObject(&obs.CopyObjectInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
 				Bucket:       d.Bucket,
-				Key:          src,
+				Key:          dst,
 				ACL:          d.getACL(),
 				StorageClass: d.getStorageClass(),
 				//SseHeader:    obs.SseKmsHeader{Encryption: obs.DEFAULT_SSE_KMS_ENCRYPTION},
 			},
 			CopySourceBucket: d.Bucket,
-			CopySourceKey:    dst,
+			CopySourceKey:    src,
 			ContentType:      d.getContentType(),
 		})
 
@@ -972,12 +972,12 @@ func (d *driver) getCopyParts(srcBucket, srcKey, dstBucket, dstKey, uploadId str
 		}
 
 		copyPartOutput, _copyPartError := d.Client.CopyPart(&obs.CopyPartInput{
-			Bucket:               srcBucket,
-			Key:                  srcKey,
+			Bucket:               dstBucket,
+			Key:                  dstKey,
 			UploadId:             uploadId,
 			PartNumber:           int(i + 1),
-			CopySourceBucket:     dstBucket,
-			CopySourceKey:        dstKey,
+			CopySourceBucket:     srcBucket,
+			CopySourceKey:        srcKey,
 			CopySourceRangeStart: firstByte,
 			CopySourceRangeEnd:   lastByte,
 		})
