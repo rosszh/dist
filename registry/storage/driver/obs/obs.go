@@ -538,11 +538,11 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 	})
 	if err != nil {
 		status, code, message, requestId := getErrorInfo(err)
-		logrus.Errorf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+		logrus.Errorf("[driver.Writer] ListMultipartUploads with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 			key, d.Bucket, status, code, message, requestId)
 		return nil, parseError(path, err)
 	}
-	logrus.Debugf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - status [%d] - request id [%s]",
+	logrus.Debugf("[driver.Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - status [%d] - request id [%s]",
 		key, d.Bucket, output.StatusCode, output.RequestId)
 	for _, multi := range output.Uploads {
 		if key != multi.Key {
@@ -555,7 +555,7 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 		})
 		if err != nil {
 			status, code, message, requestId := getErrorInfo(err)
-			logrus.Errorf("[Writer] ListMultipartUploads then ListParts with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			logrus.Errorf("[driver.Writer] ListMultipartUploads then ListParts with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 				key, d.Bucket, status, code, message, requestId)
 			return nil, parseError(path, err)
 		}
@@ -566,7 +566,7 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 		}
 		return d.newWriter(key, multi.UploadId, output.Parts), nil
 	}
-	logrus.Errorf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - but not uploads found",
+	logrus.Errorf("[driver.Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - but not uploads found",
 		key, d.Bucket)
 	return nil, storagedriver.PathNotFoundError{Path: path}
 }
@@ -714,6 +714,8 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 				src, dst, d.Bucket, status, code, message, requestId)
 			return parseError(sourcePath, err)
 		}
+		logrus.Debugf("[copy] Finished to copy source key [%s] to destination key [%s] in the bucket [%s] ",
+			src, dst, d.Bucket)
 		return nil
 	}
 	initOutput, err := d.Client.InitiateMultipartUpload(&obs.InitiateMultipartUploadInput{
@@ -788,7 +790,7 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 		logrus.Errorf("[copy] CompleteMultipartUpload source key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 			src, dst, d.Bucket, initOutput.UploadId, status, code, message, requestId)
 	}
-	logrus.Debugf("[copy] Finished to copy source key [%s] to destination key [%s] in the bucket [%s] ",
+	logrus.Debugf("[copy] Finished to Multipart copy source key [%s] to destination key [%s] in the bucket [%s] ",
 		src, dst, d.Bucket)
 	return err
 }
@@ -1057,6 +1059,8 @@ func (w *writer) Write(p []byte) (int, error) {
 	// If the last written part is smaller than minChunkSize, we need to make a
 	// new multipart upload :sadface:
 	if len(w.parts) > 0 && int(w.parts[len(w.parts)-1].Size) < minChunkSize {
+		logrus.Debugf("[writer.Write] Last part size litter than minChunSize [%d], to complete and start a new multipart upload. key [%s] in bucket [%s] - upload id [%s] - size [%d]",
+			minChunkSize, w.key, w.driver.Bucket, w.uploadID, w.size)
 		var completedUploadedParts completedParts
 		for _, part := range w.parts {
 			completedUploadedParts = append(completedUploadedParts, obs.Part{
@@ -1075,7 +1079,7 @@ func (w *writer) Write(p []byte) (int, error) {
 		})
 		if err != nil {
 			status, code, message, requestId := getErrorInfo(err)
-			logrus.Errorf("[write.Write] CompleteMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			logrus.Errorf("[writer.Write] CompleteMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 				w.key, w.driver.Bucket, w.uploadID, status, code, message, requestId)
 			w.driver.Client.AbortMultipartUpload(&obs.AbortMultipartUploadInput{
 				Bucket:   w.driver.Bucket,
@@ -1084,7 +1088,6 @@ func (w *writer) Write(p []byte) (int, error) {
 			})
 			return 0, err
 		}
-
 		// complete multi part upload, then init a new multi upload
 		output, err := w.driver.Client.InitiateMultipartUpload(&obs.InitiateMultipartUploadInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
@@ -1098,12 +1101,12 @@ func (w *writer) Write(p []byte) (int, error) {
 		})
 		if err != nil {
 			status, code, message, requestId := getErrorInfo(err)
-			logrus.Errorf("[write.Write] InitiateMultipartUpload key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			logrus.Errorf("[writer.Write] InitiateMultipartUpload key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 				w.key, w.driver.Bucket, status, code, message, requestId)
 			return 0, err
 		}
 		w.uploadID = output.UploadId
-		logrus.Debugf("[write.Write] InitiateMultipartUpload with key [%s] in the bucket [%s] successfully - upload id [%s] status [%d] - request id [%s]",
+		logrus.Debugf("[writer.Write] InitiateMultipartUpload with key [%s] in the bucket [%s] successfully - upload id [%s] status [%d] - request id [%s]",
 			w.key, w.driver.Bucket, output.UploadId, output.StatusCode, output.RequestId)
 		// If the entire written file is smaller than minChunkSize, we need to make
 		// a new part from scratch :double sad face:
@@ -1117,7 +1120,7 @@ func (w *writer) Write(p []byte) (int, error) {
 			defer output.Body.Close()
 			if err != nil {
 				status, code, message, requestId := getErrorInfo(err)
-				logrus.Errorf("[write.Write] GetObject key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				logrus.Errorf("[writer.Write] GetObject key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 					w.key, w.driver.Bucket, status, code, message, requestId)
 				return 0, err
 			}
@@ -1125,7 +1128,7 @@ func (w *writer) Write(p []byte) (int, error) {
 			w.parts = nil
 			w.readyPart, err = ioutil.ReadAll(output.Body)
 			if err != nil {
-				logrus.Errorf("[write.Write] ioutil.ReadAll key [%s] in the bucket [%s] Body failed - error message [%s]",
+				logrus.Errorf("[writer.Write] ioutil.ReadAll key [%s] in the bucket [%s] Body failed - error message [%s]",
 					w.key, w.driver.Bucket, err.Error())
 				return 0, err
 			}
@@ -1143,7 +1146,7 @@ func (w *writer) Write(p []byte) (int, error) {
 				})
 				if err != nil {
 					status, code, message, requestId := getErrorInfo(err)
-					logrus.Errorf("[write.Write] CopyPart key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+					logrus.Errorf("[writer.Write] CopyPart key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
 						w.key, w.key, w.driver.Bucket, output.UploadId, status, code, message, requestId)
 					return 0, err
 				}
@@ -1200,7 +1203,7 @@ func (w *writer) Write(p []byte) (int, error) {
 		}
 	}
 	w.size += int64(n)
-	logrus.Debugf("[Write] Finished to write key [%s] in the bucket [%s] - upload id [%s] - size [%d]",
+	logrus.Debugf("[writer.Write] Finished to write key [%s] in the bucket [%s] - upload id [%s] - size [%d]",
 		w.key, w.driver.Bucket, w.uploadID, w.size)
 	return n, nil
 }
