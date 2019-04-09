@@ -14,7 +14,12 @@ package obs
 import (
 	"bytes"
 	"context"
+	"eSDK_Storage_OBS_V2.2.1_Go/src/obs"
 	"fmt"
+	storagedriver "github.com/docker/distribution/registry/storage/driver"
+	"github.com/docker/distribution/registry/storage/driver/base"
+	"github.com/docker/distribution/registry/storage/driver/factory"
+	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"math"
@@ -23,11 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"eSDK_Storage_OBS_V2.2.1_Go/src/obs"
-	storagedriver "github.com/docker/distribution/registry/storage/driver"
-	"github.com/docker/distribution/registry/storage/driver/base"
-	"github.com/docker/distribution/registry/storage/driver/factory"
 )
 
 const driverName = "obs"
@@ -40,7 +40,7 @@ const (
 	// maxChunkSize defines the maximum multipart upload chunk size allowed by OBS. (5GB)
 	maxChunkSize = 5 << 30
 
-	defaultChunkSize = 40*minChunkSize
+	defaultChunkSize = 40 * minChunkSize
 
 	// defaultMultipartCopyChunkSize defines the default chunk size for all
 	// but the last Upload Part - Copy operation of a multipart copy.
@@ -157,26 +157,31 @@ type Driver struct {
 // - bucketname
 func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 	accessKey := parameters["accesskey"]
+	logrus.Debugf("[FromParameters] The accesskey is [%v]", accessKey)
 	if accessKey == nil {
 		accessKey = ""
 	}
 	secretKey := parameters["secretkey"]
+	logrus.Debugf("[FromParameters] The secretKey is [%v]", secretKey)
 	if secretKey == nil {
 		secretKey = ""
 	}
 
 	bucket := parameters["bucket"]
+	logrus.Debugf("[FromParameters] The bucket is [%v]", secretKey)
 	if bucket == nil || fmt.Sprint(bucket) == "" {
 		return nil, fmt.Errorf("No bucket parameter provided")
 	}
 
 	endpoint := parameters["endpoint"]
+	logrus.Debugf("[FromParameters] The endpoint is [%v]", endpoint)
 	if endpoint == nil || fmt.Sprint(endpoint) == "" {
 		return nil, fmt.Errorf("No endpoint parameter provided")
 	}
 
 	region := ""
 	regionName := parameters["region"]
+	logrus.Debugf("[FromParameters] The regionName is [%v]", regionName)
 	if regionName == nil || fmt.Sprint(regionName) == "" {
 		return nil, fmt.Errorf("No region parameter provided")
 	} else {
@@ -210,6 +215,7 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 
 	v2 := obs.SignatureV2
 	v2auth := parameters["v2auth"]
+	logrus.Debugf("[FromParameters] The v2auth is [%v]", v2auth)
 	switch v2auth := v2auth.(type) {
 	case string:
 		v2 = obs.SignatureType(v2auth)
@@ -348,8 +354,8 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 
 // getParameterAsInt64 converts paramaters[name] to an int64 value (using
 // defaultt if nil), verifies it is no smaller than min, and returns it.
-func getParameterAsInt64(parameters map[string]interface{}, name string, defaultt int64, min int64, max int64) (int64, error) {
-	rv := defaultt
+func getParameterAsInt64(parameters map[string]interface{}, name string, defaultValue int64, min int64, max int64) (int64, error) {
+	rv := defaultValue
 	param := parameters[name]
 	switch v := param.(type) {
 	case string:
@@ -377,13 +383,13 @@ func getParameterAsInt64(parameters map[string]interface{}, name string, default
 // New constructs a new Driver with the given
 // Huawei Cloud credentials, region and bucketName
 func New(params DriverParameters) (*Driver, error) {
-        defer obs.CloseLog()
-        //obs.SyncLog() 
+	defer obs.CloseLog()
+	//obs.SyncLog()
 	client, _ := obs.New(
 		params.AccessKey,
 		params.SecretKey,
 		params.Endpoint,
-		obs.WithRegion(params.Region),
+		//obs.WithRegion(params.Region),
 		obs.WithSslVerify(params.Secure),
 		obs.WithSignature(params.V2Auth),
 		obs.WithPathStyle(params.PathStyle),
@@ -395,11 +401,14 @@ func New(params DriverParameters) (*Driver, error) {
 		Bucket:       params.Bucket,
 		ACL:          params.ObjectACL,
 		StorageClass: params.StorageClass,
-		BucketLocation: obs.BucketLocation{
+		/*BucketLocation: obs.BucketLocation{
 			Location: params.Region,
-		},
+		},*/
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[New] CreateBucket bucket [%s] in region [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			params.Bucket, params.Region, status, code, message, requestId)
 		return nil, err
 	}
 
@@ -431,8 +440,11 @@ func (d *driver) Name() string {
 
 // GetContent retrieves the content stored at "path" as a []byte.
 func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
-        reader, err := d.Reader(ctx, path, 0)
+	reader, err := d.Reader(ctx, path, 0)
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[GetContent] Get key [%s] content in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			d.obsPath(path), d.Bucket, status, code, message, requestId)
 		return nil, err
 	}
 	return ioutil.ReadAll(reader)
@@ -440,11 +452,12 @@ func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 
 // PutContent stores the []byte content at a location designated by "path".
 func (d *driver) PutContent(ctx context.Context, path string, contents []byte) error {
-	_, err := d.Client.PutObject(&obs.PutObjectInput{
+	key := d.obsPath(path)
+	out, err := d.Client.PutObject(&obs.PutObjectInput{
 		PutObjectBasicInput: obs.PutObjectBasicInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
 				Bucket:       d.Bucket,
-				Key:          d.obsPath(path),
+				Key:          key,
 				ACL:          d.getACL(),
 				StorageClass: d.getStorageClass(),
 				//SseHeader:    obs.SseKmsHeader{Encryption: obs.DEFAULT_SSE_KMS_ENCRYPTION},
@@ -453,27 +466,40 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) e
 		},
 		Body: bytes.NewReader(contents),
 	})
+	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[PutContent] Put destination key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			key, d.Bucket, status, code, message, requestId)
+	} else {
+		logrus.Debugf("[PutContent] Put destination key [%s] in the bucket [%s] successfully - status [%d] - request id [%s]",
+			key, d.Bucket, out.StatusCode, out.RequestId)
+	}
 	return parseError(path, err)
 }
 
 // Reader retrieves an io.ReadCloser for the content stored at "path" with a
 // given byte offset.
 func (d *driver) Reader(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
+	key := d.obsPath(path)
 	output, err := d.Client.GetObject(&obs.GetObjectInput{
 		GetObjectMetadataInput: obs.GetObjectMetadataInput{
 			Bucket: d.Bucket,
-			Key:    d.obsPath(path),
+			Key:    key,
 		},
 		RangeStart: offset,
 	})
 
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[Reader] Reader key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			key, d.Bucket, status, code, message, requestId)
 		if obsErr, ok := err.(obs.ObsError); ok && obsErr.Code == "InvalidRange" {
 			return ioutil.NopCloser(bytes.NewReader(nil)), nil
 		}
-
 		return nil, parseError(path, err)
 	}
+	logrus.Debugf("[Reader] Reader key [%s] in the bucket [%s] successfully - status [%d] - request id [%s]",
+		key, d.Bucket, output.StatusCode, output.RequestId)
 	return output.Body, nil
 }
 
@@ -483,8 +509,8 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 	key := d.obsPath(path)
 	if !append {
 		// TODO (brianbland): cancel other uploads at this path
-	//	obs.InitLog("/obs_log/OBS-SDK.log", 1024*1024*100, 10, obs.LEVEL_INFO, false)
-	//	obs.SyncLog()
+		//	obs.InitLog("/obs_log/OBS-SDK.log", 1024*1024*100, 10, obs.LEVEL_INFO, false)
+		//	obs.SyncLog()
 		output, err := d.Client.InitiateMultipartUpload(&obs.InitiateMultipartUploadInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
 				Bucket:       d.Bucket,
@@ -496,8 +522,13 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 			ContentType: d.getContentType(),
 		})
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[driver.Writer] InitiateMultipartUpload with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				key, d.Bucket, status, code, message, requestId)
 			return nil, err
 		}
+		logrus.Debugf("[driver.Writer] InitiateMultipartUpload with key [%s] in the bucket [%s] successfully - upload id [%s] status [%d] - request id [%s]",
+			key, d.Bucket, output.UploadId, output.StatusCode, output.RequestId)
 		return d.newWriter(key, output.UploadId, nil), nil
 	}
 
@@ -506,9 +537,13 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 		Prefix: key,
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			key, d.Bucket, status, code, message, requestId)
 		return nil, parseError(path, err)
 	}
-
+	logrus.Debugf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - status [%d] - request id [%s]",
+		key, d.Bucket, output.StatusCode, output.RequestId)
 	for _, multi := range output.Uploads {
 		if key != multi.Key {
 			continue
@@ -519,6 +554,9 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 			UploadId: multi.UploadId,
 		})
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[Writer] ListMultipartUploads then ListParts with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				key, d.Bucket, status, code, message, requestId)
 			return nil, parseError(path, err)
 		}
 
@@ -528,20 +566,26 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 		}
 		return d.newWriter(key, multi.UploadId, output.Parts), nil
 	}
+	logrus.Errorf("[Writer] ListMultipartUploads with key [%s] in the bucket [%s] successfully - but not uploads found",
+		key, d.Bucket)
 	return nil, storagedriver.PathNotFoundError{Path: path}
 }
 
 // Stat retrieves the FileInfo for the given path, including the current size
 // in bytes and the creation time.
 func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+	key := d.obsPath(path)
 	output, err := d.Client.ListObjects(&obs.ListObjectsInput{
 		ListObjsInput: obs.ListObjsInput{
-			Prefix:  d.obsPath(path),
+			Prefix:  key,
 			MaxKeys: 1,
 		},
 		Bucket: d.Bucket,
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[Stat] ListObjects with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			key, d.Bucket, status, code, message, requestId)
 		return nil, err
 	}
 
@@ -579,48 +623,39 @@ func (d *driver) List(ctx context.Context, opath string) ([]string, error) {
 	if d.obsPath("") == "" {
 		prefix = "/"
 	}
-
-	output, err := d.Client.ListObjects(&obs.ListObjectsInput{
-		ListObjsInput: obs.ListObjsInput{
-			Prefix:    d.obsPath(path),
-			MaxKeys:   listMax,
-			Delimiter: "/",
-		},
-		Bucket: d.Bucket,
-	})
-	if err != nil {
-		return nil, parseError(opath, err)
-	}
+	_key := d.obsPath(path)
+	logrus.Debugf("[List] Start to List key [%s] in bucket [%s]", _key, d.Bucket)
+	input := &obs.ListObjectsInput{}
+	input.Bucket = d.Bucket
+	input.Prefix = _key
+	input.MaxKeys = listMax
+	input.Delimiter = "/"
 
 	files := []string{}
 	directories := []string{}
 
 	for {
+		output, err := d.Client.ListObjects(input)
+		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[List] ListObjects with key [%s] in the bucket [%s] failed - marker [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				_key, d.Bucket, input.Marker, status, code, message, requestId)
+			return nil, parseError(opath, err)
+		}
 		for _, key := range output.Contents {
 			files = append(files, strings.Replace(key.Key, d.obsPath(""), prefix, 1))
 		}
 
 		for _, commonPrefix := range output.CommonPrefixes {
-//                        commonPrefix := commonPrefix>Prefix
 			directories = append(directories, strings.Replace(commonPrefix[0:len(commonPrefix)-1], d.obsPath(""), prefix, 1))
 		}
 
-		if output.IsTruncated {
-			output, err = d.Client.ListObjects(&obs.ListObjectsInput{
-				ListObjsInput: obs.ListObjsInput{
-					Prefix:    d.obsPath(path),
-					Delimiter: "/",
-					MaxKeys:   listMax,
-				},
-				Bucket: d.Bucket,
-				Marker: output.NextMarker,
-			})
-			if err != nil {
-				return nil, err
-			}
-		} else {
+		if !output.IsTruncated {
+			logrus.Debugf("[List] ListObjects in the bucket [%s] finished - prefix [%s] - marker [%s]",
+				d.Bucket, input.Prefix, input.Marker)
 			break
 		}
+		input.Marker = output.NextMarker
 	}
 
 	if opath != "/" {
@@ -630,6 +665,7 @@ func (d *driver) List(ctx context.Context, opath string) ([]string, error) {
 			return nil, storagedriver.PathNotFoundError{Path: opath}
 		}
 	}
+	logrus.Debugf("[List] Finished to List with key [%s] in bucket [%s]", _key, d.Bucket)
 	return append(files, directories...), nil
 }
 
@@ -649,25 +685,33 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 	//
 	// For each part except the last part, file size has to be in the range of
 	//[100KB, 5GB], the last part should be at least 100KB.
-        fileInfo, err := d.Stat(ctx, sourcePath)
+
+	fileInfo, err := d.Stat(ctx, sourcePath)
 	if err != nil {
 		return parseError(sourcePath, err)
 	}
+	src := d.obsPath(destPath)
+	dst := d.obsPath(sourcePath)
+	logrus.Debugf("[copy] Start to copy source key [%s] to destination key [%s] in the bucket [%s] ",
+		src, dst, d.Bucket)
 	if fileInfo.Size() <= d.MultipartCopyThresholdSize {
 		_, err := d.Client.CopyObject(&obs.CopyObjectInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
 				Bucket:       d.Bucket,
-				Key:          d.obsPath(destPath),
+				Key:          src,
 				ACL:          d.getACL(),
 				StorageClass: d.getStorageClass(),
 				//SseHeader:    obs.SseKmsHeader{Encryption: obs.DEFAULT_SSE_KMS_ENCRYPTION},
 			},
 			CopySourceBucket: d.Bucket,
-			CopySourceKey:    d.obsPath(sourcePath),
+			CopySourceKey:    dst,
 			ContentType:      d.getContentType(),
 		})
 
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[copy] copy source key [%s] to destination key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				src, dst, d.Bucket, status, code, message, requestId)
 			return parseError(sourcePath, err)
 		}
 		return nil
@@ -675,7 +719,7 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 	initOutput, err := d.Client.InitiateMultipartUpload(&obs.InitiateMultipartUploadInput{
 		ObjectOperationInput: obs.ObjectOperationInput{
 			Bucket:       d.Bucket,
-			Key:          d.obsPath(destPath),
+			Key:          dst,
 			ACL:          d.getACL(),
 			StorageClass: d.getStorageClass(),
 			//SseHeader:    obs.SseKmsHeader{Encryption: obs.DEFAULT_SSE_KMS_ENCRYPTION},
@@ -683,14 +727,19 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 		ContentType: d.getContentType(),
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[copy] InitiateMultipartUpload with key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			dst, d.Bucket, status, code, message, requestId)
 		return err
 	}
+	logrus.Debugf("[copy] InitiateMultipartUpload with key [%s] in the bucket [%s] successfully - upload id [%s] status [%d] - request id [%s]",
+		dst, d.Bucket, initOutput.UploadId, initOutput.StatusCode, initOutput.RequestId)
 	numParts := (fileInfo.Size() + d.MultipartCopyChunkSize - 1) / d.MultipartCopyChunkSize
 	completedParts := make([]obs.Part, numParts)
 	errChan := make(chan error, numParts)
 	limiter := make(chan struct{}, d.MultipartCopyMaxConcurrency)
 	for i := range completedParts {
-	        i := int64(i)
+		i := int64(i)
 		go func() {
 			limiter <- struct{}{}
 			firstByte := i * d.MultipartCopyChunkSize
@@ -700,14 +749,14 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 			}
 
 			uploadOutput, err := d.Client.CopyPart(&obs.CopyPartInput{
-				Bucket:     d.Bucket,
-				Key:        d.obsPath(destPath),
-                                UploadId:   initOutput.UploadId,
-                                PartNumber: int(i + 1),
-                                CopySourceBucket: d.Bucket,
-				CopySourceKey: d.obsPath(sourcePath),
+				Bucket:               d.Bucket,
+				Key:                  dst,
+				UploadId:             initOutput.UploadId,
+				PartNumber:           int(i + 1),
+				CopySourceBucket:     d.Bucket,
+				CopySourceKey:        src,
 				CopySourceRangeStart: firstByte,
-                                CopySourceRangeEnd: lastByte,
+				CopySourceRangeEnd:   lastByte,
 			})
 			if err == nil {
 				completedParts[i] = obs.Part{
@@ -722,6 +771,9 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 	for range completedParts {
 		err := <-errChan
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[copy] MultipartUpload Copy source key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				src, dst, d.Bucket, initOutput.UploadId, status, code, message, requestId)
 			return err
 		}
 	}
@@ -731,6 +783,13 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 		UploadId: initOutput.UploadId,
 		Parts:    completedParts,
 	})
+	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[copy] CompleteMultipartUpload source key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			src, dst, d.Bucket, initOutput.UploadId, status, code, message, requestId)
+	}
+	logrus.Debugf("[copy] Finished to copy source key [%s] to destination key [%s] in the bucket [%s] ",
+		src, dst, d.Bucket)
 	return err
 }
 
@@ -738,6 +797,8 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 func (d *driver) Delete(ctx context.Context, path string) error {
 	obsObjects := make([]obs.ObjectToDelete, 0, listMax)
 	obsPath := d.obsPath(path)
+	logrus.Debugf("[Delete] Starting to delete key [%s] in the bucket [%s] ",
+		obsPath, d.Bucket)
 	listObjectsInput := &obs.ListObjectsInput{
 		ListObjsInput: obs.ListObjsInput{
 			Prefix: obsPath,
@@ -754,6 +815,9 @@ ListLoop:
 		// if there were no more results to return after the first call, output.IsTruncated would have been false
 		// and the loop would be exited without recalling ListObjects
 		if err != nil || len(output.Contents) == 0 {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[Delete] ListObjects key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				obsPath, d.Bucket, status, code, message, requestId)
 			return storagedriver.PathNotFoundError{Path: path}
 		}
 
@@ -786,20 +850,30 @@ ListLoop:
 			Objects: obsObjects[i:min(i+1000, total)],
 		})
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[Delete] DeleteObjects key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				obsPath, d.Bucket, status, code, message, requestId)
 			return err
 		}
 	}
+	logrus.Debugf("[Delete] Finished to delete key [%s] in the bucket [%s] ",
+		obsPath, d.Bucket)
 	return nil
 }
 
 // URLFor returns a URL which may be used to retrieve the content stored at the given path.
 // May return an UnsupportedMethodErr in certain StorageDriver implementations.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
+	key := d.obsPath(path)
+	logrus.Debugf("[URLFor] Starting to URLFor key [%s] in the bucket [%s] ",
+		key, d.Bucket)
 	methodString := obs.HTTP_GET
 	method, ok := options["method"]
 	if ok {
 		methodString, ok = method.(string)
 		if !ok || (methodString != obs.HTTP_GET && methodString != obs.HTTP_HEAD) {
+			logrus.Errorf("[URLFor] URLFor key [%s] in the bucket [%s] failed - http method [%s] is not supported, just support [GET|HEAD].",
+				key, d.Bucket, methodString)
 			return "", storagedriver.ErrUnsupportedMethod{}
 		}
 	}
@@ -816,10 +890,16 @@ func (d *driver) URLFor(ctx context.Context, path string, options map[string]int
 	output, err := d.Client.CreateSignedUrl(&obs.CreateSignedUrlInput{
 		Method:  obs.HttpMethodType(methodString),
 		Bucket:  d.Bucket,
-		Key:     d.obsPath(path),
+		Key:     key,
 		Expires: int(expiresIn.Seconds()),
 	})
-	fmt.Printf("OBS-URLFor methodString: %s, expiresTime: %v\n", methodString, int(expiresIn.Seconds()))
+	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[URLFor] URLFor key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			key, d.Bucket, status, code, message, requestId)
+	}
+	logrus.Debugf("[URLFor] Finished to URLFor key [%s] in the bucket [%s] - method [%s] - expires time [%d] - signed url [%s]",
+		key, d.Bucket, methodString, int(expiresIn.Seconds()), output.SignedUrl)
 	return output.SignedUrl, err
 }
 
@@ -860,13 +940,62 @@ func (d *driver) getACL() obs.AclType {
 func (d *driver) getStorageClass() obs.StorageClassType {
 	return obs.StorageClassType(d.StorageClass)
 }
-
+func getErrorInfo(err error) (status int, code string, message string, requestId string) {
+	if obsError, ok := err.(obs.ObsError); ok {
+		status = obsError.StatusCode
+		code = obsError.Code
+		message = obsError.Message
+		requestId = obsError.RequestId
+	} else {
+		message = err.Error()
+	}
+	return
+}
 func parseError(path string, err error) error {
 	if obsErr, ok := err.(obs.ObsError); ok && obsErr.Code == "NoSuchKey" {
 		return storagedriver.PathNotFoundError{Path: path}
 	}
 
 	return err
+}
+
+func (d *driver) getCopyParts(srcBucket, srcKey, dstBucket, dstKey, uploadId string, fileSize int64) (parts []obs.Part, copyPartError error) {
+	numParts := (fileSize + d.MultipartCopyChunkSize - 1) / d.MultipartCopyChunkSize
+	completedParts := make([]obs.Part, numParts)
+
+	for i := range completedParts {
+		i := int64(i)
+		firstByte := i * d.MultipartCopyChunkSize
+		lastByte := firstByte + d.MultipartCopyChunkSize - 1
+		if lastByte >= fileSize {
+			lastByte = fileSize - 1
+		}
+
+		copyPartOutput, _copyPartError := d.Client.CopyPart(&obs.CopyPartInput{
+			Bucket:               srcBucket,
+			Key:                  srcKey,
+			UploadId:             uploadId,
+			PartNumber:           int(i + 1),
+			CopySourceBucket:     dstBucket,
+			CopySourceKey:        dstKey,
+			CopySourceRangeStart: firstByte,
+			CopySourceRangeEnd:   lastByte,
+		})
+		if _copyPartError == nil {
+			completedParts[i] = obs.Part{
+				ETag:       copyPartOutput.ETag,
+				PartNumber: int(i + 1),
+				Size:       lastByte - firstByte + 1,
+			}
+		} else {
+			status, code, message, requestId := getErrorInfo(_copyPartError)
+			logrus.Errorf("[getCopyParts] CopyPart key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				srcKey, dstKey, srcBucket, uploadId, status, code, message, requestId)
+			copyPartError = _copyPartError
+		}
+	}
+	parts = completedParts
+	return
 }
 
 // writer attempts to upload parts to OBS in a buffered fashion where the last
@@ -887,7 +1016,7 @@ type writer struct {
 }
 
 func (d *driver) newWriter(key string, uploadID string, parts []obs.Part) storagedriver.FileWriter {
-        var size int64
+	var size int64
 	for _, part := range parts {
 		size += part.Size
 	}
@@ -915,6 +1044,8 @@ func (a completedParts) Less(i, j int) bool {
 }
 
 func (w *writer) Write(p []byte) (int, error) {
+	logrus.Debugf("[writer.Write] Start to write key [%s] in the bucket [%s] - upload id [%s] - size [%d]",
+		w.key, w.driver.Bucket, w.uploadID, w.size)
 	if w.closed {
 		return 0, fmt.Errorf("already closed")
 	} else if w.committed {
@@ -943,6 +1074,9 @@ func (w *writer) Write(p []byte) (int, error) {
 			Parts:    completedUploadedParts,
 		})
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[write.Write] CompleteMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				w.key, w.driver.Bucket, w.uploadID, status, code, message, requestId)
 			w.driver.Client.AbortMultipartUpload(&obs.AbortMultipartUploadInput{
 				Bucket:   w.driver.Bucket,
 				Key:      w.key,
@@ -951,6 +1085,7 @@ func (w *writer) Write(p []byte) (int, error) {
 			return 0, err
 		}
 
+		// complete multi part upload, then init a new multi upload
 		output, err := w.driver.Client.InitiateMultipartUpload(&obs.InitiateMultipartUploadInput{
 			ObjectOperationInput: obs.ObjectOperationInput{
 				Bucket:       w.driver.Bucket,
@@ -962,10 +1097,14 @@ func (w *writer) Write(p []byte) (int, error) {
 			ContentType: w.driver.getContentType(),
 		})
 		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[write.Write] InitiateMultipartUpload key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				w.key, w.driver.Bucket, status, code, message, requestId)
 			return 0, err
 		}
 		w.uploadID = output.UploadId
-
+		logrus.Debugf("[write.Write] InitiateMultipartUpload with key [%s] in the bucket [%s] successfully - upload id [%s] status [%d] - request id [%s]",
+			w.key, w.driver.Bucket, output.UploadId, output.StatusCode, output.RequestId)
 		// If the entire written file is smaller than minChunkSize, we need to make
 		// a new part from scratch :double sad face:
 		if w.size < minChunkSize {
@@ -977,33 +1116,53 @@ func (w *writer) Write(p []byte) (int, error) {
 			})
 			defer output.Body.Close()
 			if err != nil {
+				status, code, message, requestId := getErrorInfo(err)
+				logrus.Errorf("[write.Write] GetObject key [%s] in the bucket [%s] failed - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+					w.key, w.driver.Bucket, status, code, message, requestId)
 				return 0, err
 			}
 
 			w.parts = nil
 			w.readyPart, err = ioutil.ReadAll(output.Body)
 			if err != nil {
+				logrus.Errorf("[write.Write] ioutil.ReadAll key [%s] in the bucket [%s] Body failed - error message [%s]",
+					w.key, w.driver.Bucket, err.Error())
 				return 0, err
 			}
 		} else {
+			logrus.Debugf("[writer.Write] last part less than [%d], than copy obs part as a new part, wait to complete.", minChunkSize)
 			// Otherwise we can use the old file as the new first part
-			copyPartOutput, err := w.driver.Client.CopyPart(&obs.CopyPartInput{
-					Bucket: w.driver.Bucket,
-                                        Key: w.key,
-                                        UploadId: output.UploadId,
-                                        PartNumber: 1,
-                                        CopySourceBucket: w.driver.Bucket,
-                                        CopySourceKey: w.driver.Bucket + "/" + w.key,
-			})
-			if err != nil {
-				return 0, err
+			if w.size < maxChunkSize {
+				copyPartOutput, err := w.driver.Client.CopyPart(&obs.CopyPartInput{
+					Bucket:           w.driver.Bucket,
+					Key:              w.key,
+					UploadId:         output.UploadId,
+					PartNumber:       1,
+					CopySourceBucket: w.driver.Bucket,
+					CopySourceKey:    w.key,
+				})
+				if err != nil {
+					status, code, message, requestId := getErrorInfo(err)
+					logrus.Errorf("[write.Write] CopyPart key [%s] to destination key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+						w.key, w.key, w.driver.Bucket, output.UploadId, status, code, message, requestId)
+					return 0, err
+				}
+
+				w.parts = []obs.Part{
+					{
+						ETag:       copyPartOutput.ETag,
+						PartNumber: 1,
+						Size:       w.size,
+					},
+				}
+			} else {
+				if completedParts, copyPartError := w.driver.getCopyParts(w.driver.Bucket, w.key, w.driver.Bucket, w.key, output.UploadId, w.size); copyPartError == nil {
+					w.parts = completedParts
+				} else {
+					return 0, copyPartError
+				}
 			}
 
-			w.parts = append(w.parts, obs.Part{
-				ETag:       copyPartOutput.ETag,
-				PartNumber: 1,
-				Size:       w.size,
-			})
 		}
 	}
 
@@ -1041,6 +1200,8 @@ func (w *writer) Write(p []byte) (int, error) {
 		}
 	}
 	w.size += int64(n)
+	logrus.Debugf("[Write] Finished to write key [%s] in the bucket [%s] - upload id [%s] - size [%d]",
+		w.key, w.driver.Bucket, w.uploadID, w.size)
 	return n, nil
 }
 
@@ -1068,6 +1229,11 @@ func (w *writer) Cancel() error {
 		Key:      w.key,
 		UploadId: w.uploadID,
 	})
+	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[write.Cancel] AbortMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			w.key, w.driver.Bucket, w.uploadID, status, code, message, requestId)
+	}
 	return err
 }
 
@@ -1102,11 +1268,19 @@ func (w *writer) Commit() error {
 		Parts:    completedUploadedParts,
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[write.Commit] CompleteMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			w.key, w.driver.Bucket, w.uploadID, status, code, message, requestId)
 		w.driver.Client.AbortMultipartUpload(&obs.AbortMultipartUploadInput{
 			Bucket:   w.driver.Bucket,
 			Key:      w.key,
 			UploadId: w.uploadID,
 		})
+		if err != nil {
+			status, code, message, requestId := getErrorInfo(err)
+			logrus.Errorf("[write.Commit] AbortMultipartUpload key [%s] in the bucket [%s] failed - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+				w.key, w.driver.Bucket, w.uploadID, status, code, message, requestId)
+		}
 		return err
 	}
 	return nil
@@ -1135,6 +1309,9 @@ func (w *writer) flushPart() error {
 		Body:       bytes.NewReader(w.readyPart),
 	})
 	if err != nil {
+		status, code, message, requestId := getErrorInfo(err)
+		logrus.Errorf("[write.flushPart] UploadPart key [%s] in the bucket [%s] failed - part number [%d] - upload id [%s] - status [%d] - error code [%s] - error message [%s] - request id [%s]",
+			w.key, w.driver.Bucket, partNumber, w.uploadID, status, code, message, requestId)
 		return err
 	}
 
