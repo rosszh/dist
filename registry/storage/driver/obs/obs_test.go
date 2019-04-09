@@ -303,3 +303,31 @@ func TestMoveWithMultipartCopy(t *testing.T) {
 		t.Fatalf("unexpected error getting content: %v", err)
 	}
 }
+
+func TestWriter_Write(t *testing.T) {
+	if skipOBS() != "" {
+		t.Skip(skipOBS())
+	}
+
+	rootDir := "/"
+	defer os.Remove(rootDir)
+
+	d, err := obsDriverConstructor(rootDir, obs.StorageClassStandard)
+	if err != nil {
+		t.Fatalf("unexpected error creating driver with standard storage: %v", err)
+	}
+
+	ctx := context.Background()
+	sourcePath := "/user/z00454515/test-registry-03"
+	//destPath := "/des"
+
+	//defer d.Delete(ctx, sourcePath)
+	//defer d.Delete(ctx, destPath)
+	largebuf, _ := ioutil.ReadFile("D://var//user//backup.pst")
+	writer, _ := d.Writer(ctx, sourcePath, true)
+	writer.Write(largebuf)
+	minibuf1, _ := ioutil.ReadFile("D://var//user//job.json")
+	writer.Write(minibuf1)
+	writer.Write(largebuf)
+	writer.Commit()
+}
