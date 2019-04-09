@@ -690,8 +690,8 @@ func (d *driver) copy(ctx context.Context, sourcePath string, destPath string) e
 	if err != nil {
 		return parseError(sourcePath, err)
 	}
-	src := d.obsPath(destPath)
-	dst := d.obsPath(sourcePath)
+	src := d.obsPath(sourcePath)
+	dst := d.obsPath(destPath)
 	logrus.Debugf("[copy] Start to copy source key [%s] to destination key [%s] in the bucket [%s] ",
 		src, dst, d.Bucket)
 	if fileInfo.Size() <= d.MultipartCopyThresholdSize {
